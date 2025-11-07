@@ -22,19 +22,20 @@ void training::buildWeights() {
     // Load dictionary: token, ID
     std::unordered_map<std::string, int> dictionary = read_dict();
 
-	std::cout << "Generating embeddings...\n";
     // Generate embeddings from dictionary
+	std::cout << "Generating embeddings...\n";
     std::vector<std::vector<float>> updatedEmbeddings = generateEmbeddings(embedding_dim, dictionary);
 
     // Generate positional encodings
 	std::cout << "Generating positional encodings...\n";
     std::vector<std::vector<float>> updatedPE = generatePE(embedding_dim, updatedEmbeddings);
     
+
     // Merge embeddings and positional encodings
 	std::cout << "Combining embeddings and positional encodings...\n";
 	std::vector<std::vector<float>> finalEmbeddings(updatedEmbeddings.size(), std::vector<float>(embedding_dim, 0.0f));
     
-    for (size_t i = 0; i < updatedEmbeddings.size(); ++i) {
+    for (size_t i = 0; i < updatedEmbeddings.size(); ++i) { // Combine them
         for (int j = 0; j < embedding_dim; ++j) {
             finalEmbeddings[i][j] = updatedEmbeddings[i][j] + updatedPE[i][j];
         }
@@ -51,6 +52,23 @@ void training::buildWeights() {
 
     // Save weight matrices
     write3DVector("../weights.txt", weights);
+
+    std::ifstream file("../training_data.txt");
+    if (!file.is_open()) throw std::runtime_error("Error opening file");
+
+    std::string data((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+
+    // Get # of sequences
+    std::vector<int> sequence = makeSequence(data, dictionary);
+    int totalSequences = (sequence.size() + 127) / 128; // ceil division
+
+    for (int i = 0; i < totalSequences; i++) {
+        int start = i * 128;
+        int end = std::min(start + 128, (int)sequence.size());
+        std::vector<int> currentSequence(sequence.begin() + start, sequence.begin() + end);
+    }
+
+
 }
 
 
@@ -120,12 +138,12 @@ std::vector<std::vector<float>> training::generatePE(const int embedding_dim, st
 	return encodings;
 }
 
-
+// Generate starting value for weights (random)
 std::vector<std::vector<std::vector<float>>> training::generateWeights(const int embedding_dim) {
     // Random generator for initializing new embeddings
     std::random_device rd;
     std::mt19937 gen(rd());
-
+     
     // Default value range for embeddings
      // Default range: [-1/sqrt(embedding_dim), 1/sqrt(embedding_dim)] (Reason: It sounds about right, & it scales with larger dimensions)
     std::uniform_real_distribution<float> dis((-1.0f / sqrt(embedding_dim)), 1.0f / sqrt(embedding_dim));
@@ -145,6 +163,51 @@ std::vector<std::vector<std::vector<float>>> training::generateWeights(const int
 	return weights;
 }
 
+// Splits data into sequences of sequenceLength length
+std::vector<int> training::makeSequence(const std::string& data, const std::unordered_map<std::string, int>& dictionary) { // Tokenize text into token IDs
+    std::string delims = " ,!?-()'.\"[];:/–\n——&{}";
+    std::string currentWord;
+    std::vector<int> tokenizedString;
+
+    /* Tokenization */
+    for (size_t i = 0; i < data.size(); ++i) {
+        char currentChar = data[i];
+
+        bool isDelimiter = delims.find(currentChar) != std::string::npos;
+
+        // Special handling for apostrophes
+        if (currentChar == '\'') {
+            bool prevIsLetter = (i > 0 && std::isalpha(data[i - 1]));
+            bool nextIsLetter = (i + 1 < data.size() && std::isalpha(data[i + 1]));
+
+            if (prevIsLetter && nextIsLetter) {
+                // Internal apostrophe - part of the word
+                currentWord += currentChar;
+                continue;
+            }
+            else {
+                // Standalone apostrophe - treat as delimiter
+                isDelimiter = true;
+            }
+        }
+
+        if (isDelimiter) {
+            if (!currentWord.empty()) {
+                tokenizedString.push_back(encode(currentWord, dictionary));
+                currentWord.clear();
+            }
+        }
+        else {
+            currentWord += currentChar;
+        }
+    }
+
+    if (!currentWord.empty()) {
+        tokenizedString.push_back(encode(currentWord, dictionary));
+    }
+
+    return tokenizedString;
+}
 
 
 
@@ -176,40 +239,54 @@ void training::buildDictionary() {
 
     std::string normalizedData = normalize(data);
 
-    std::string delims = " ,!?-().\"[];:/–\n——&{}";
+    std::string delims = " ,!?-()'.\"[];:/–\n——&{}";
     std::string currentWord;
 
     /* Tokenization */
     for (size_t i = 0; i < normalizedData.size(); ++i) {
         char currentChar = normalizedData[i];
 
-        if (delims.find(currentChar) != std::string::npos) {
-            // Add word to dictionary if not already within
+        bool isDelimiter = delims.find(currentChar) != std::string::npos;
+
+        // Special handling for apostrophes
+        if (currentChar == '\'') {
+            bool prevIsLetter = (i > 0 && std::isalpha(normalizedData[i - 1]));
+            bool nextIsLetter = (i + 1 < normalizedData.size() && std::isalpha(normalizedData[i + 1]));
+
+            if (prevIsLetter && nextIsLetter) {
+                // Internal apostrophe - part of the word
+                currentWord += currentChar;
+                continue;
+            }
+            else {
+                // Standalone apostrophe - treat as delimiter
+                isDelimiter = true;
+            }
+        }
+
+        if (isDelimiter) {
             if (!currentWord.empty()) {
                 define(currentWord, dictionary);
                 currentWord.clear();
             }
-
-            // Define delimiter as a token
-            std::string delimToken(1, currentChar);
-            define(delimToken, dictionary);
+            define(std::string(1, currentChar), dictionary);
         }
         else {
             currentWord += currentChar;
         }
 
-        /* Edge case, odd-grammar handling (like when ' is used instead of ") */
-        if (currentChar == '\'' &&
-            ((i + 1 < normalizedData.size() && normalizedData[i + 1] == ' ') ||
-                (i > 0 && normalizedData[i - 1] == ' '))) { // If ' is right next to a space, treat as delimiter
-            std::string delimToken(1, currentChar);
-            define(delimToken, dictionary);
-        }
-
-        if (i % 100 == 0) {
-            write_dict(dictionary); // Periodically save dictionary to avoid data loss
-        }
+        if (i % 100 == 0) write_dict(dictionary);
     }
+
+    if (!currentWord.empty()) define(currentWord, dictionary);
+
+
+    // Add last word if any
+    if (!currentWord.empty()) {
+        define(currentWord, dictionary);
+    }
+
+
 
     if (!currentWord.empty()) { // If there is a word that was cut off by the buffer size, add it
         define(currentWord, dictionary);
@@ -256,6 +333,20 @@ std::string training::decode(const std::vector<int>& tokens, const std::unordere
             return a + (a.length() > 0 ? " " : "") + b;
 		});
 }
+
+
+int training::encode(const std::string& word, const std::unordered_map<std::string, int>& dictionary) {
+    auto it = dictionary.find(word);
+    if (it != dictionary.end()) {
+
+        return it->second; // found: return token ID
+    }
+    else {
+        return -1; // or some special value for unknown word
+    }
+}
+
+
 
 
 /* Dictionary read/writing */

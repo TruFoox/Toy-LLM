@@ -23,13 +23,18 @@ public:
     /* Generate weight matrices */
     std::vector<std::vector<std::vector<float>>> generateWeights(const int embedding_dim);
 
+    /* Splits into sequences */
+    std::vector<int> makeSequence(const std::string& data, const std::unordered_map<std::string, int>& dictionary);
 
 
-    /* Encode text to tokens */
+    /* Write new word to dictionary */
    void define(const std::string& text, std::unordered_map<std::string, int>& dictionary);
 
     /* Decode tokens back to text */
     std::string decode(const std::vector<int>& tokens, const std::unordered_map<std::string, int>& dictionary);
+    
+    /* Encode text to tokens */
+    int encode(const std::string& text, const std::unordered_map<std::string, int>& dictionary);
 
     /* Dictionary read/write */
     void write_dict(const std::unordered_map<std::string, int>& dict);
