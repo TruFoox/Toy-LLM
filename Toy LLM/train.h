@@ -21,14 +21,15 @@ public:
     std::vector<std::vector<float>> generatePE(const int embedding_dim, std::vector<std::vector<float>> updatedEmbeddings);
 
     /* Generate weight matrices */
-    std::vector<std::vector<std::vector<float>>> generateWeights(const int embedding_dim);
+    std::vector<std::vector<std::vector<float>>> generateWeights(const int embedding_dim, const int vocab_size);
 
     /* Splits into sequences */
     std::vector<int> makeSequence(const std::string& data, const std::unordered_map<std::string, int>& dictionary);
-
+   
+    void clip(std::vector<std::vector<float>>& grad, float threshold);
 
     /* Write new word to dictionary */
-   void define(const std::string& text, std::unordered_map<std::string, int>& dictionary);
+    void define(const std::string& text, std::unordered_map<std::string, int>& dictionary);
 
     /* Decode tokens back to text */
     std::string decode(const std::vector<int>& tokens, const std::unordered_map<std::string, int>& dictionary);

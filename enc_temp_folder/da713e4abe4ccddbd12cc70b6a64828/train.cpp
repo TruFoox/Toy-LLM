@@ -136,7 +136,7 @@ void training::buildWeights() {
 
         /* Backward pass */
 
-        // Targets & Output Error
+        // --- Targets & Output Error ---
         std::vector<std::vector<float>> targets(sequenceLength, std::vector<float>(vocab_size, 0.0f));
         for (int m = 0; m < sequenceLength; ++m)
             targets[m][tokenSequence[m]] = 1.0f;
@@ -159,6 +159,7 @@ void training::buildWeights() {
         gradWV = matMul(transpose(attentionWeights), dContext); // embedding_dim x embedding_dim
         training::clip(gradWV, 1.0f);
 
+        // --- Gradients w.r.t Attention ---
         std::vector<std::vector<float>> dAttention(sequenceLength, std::vector<float>(sequenceLength, 0.0f));
         for (int i = 0; i < sequenceLength; ++i) {
             float sum = 0.0f;
@@ -169,10 +170,11 @@ void training::buildWeights() {
                 dAttention[i][j] = attentionWeights[i][j] * (dContext[i][j] - sum);
         }
 
-        // Gradients
+        // --- Gradients w.r.t Q and K ---
         std::vector<std::vector<float>> dQ = matMul(dAttention, K); // sequenceLength x embedding_dim
         std::vector<std::vector<float>> dK = matMul(transpose(dAttention), Q); // sequenceLength x embedding_dim
 
+        // --- Gradients w.r.t Q, K, V ---
         gradWQ = matMul(transpose(vectorSequence), dQ); // embedding_dim x embedding_dim
         gradWK = matMul(transpose(vectorSequence), dK); // embedding_dim x embedding_dim
         gradWV = matMul(transpose(vectorSequence), dContext); // embedding_dim x embedding_dim (fixed)
