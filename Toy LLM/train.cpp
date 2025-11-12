@@ -20,8 +20,8 @@ std::mutex updateMutex; // protects shared weights/embeddings
 
 /* There are a lot of comments because this is a personal learning project */
 void training::buildWeights() {
-    int embedding_dim = 512;
-    float learning_rate = 0.001f; // Set to 0.001 for finer training later
+    int embedding_dim = 300;
+    float learning_rate = 0.005f; // Set to 0.001 for finer training later
 
 
     char input;
@@ -310,13 +310,17 @@ void training::buildWeights() {
     };
 
 
-    std::thread t1(trainSubset, 0, 3); // thread 0: sequences 0, 4, 8, ...
-    std::thread t2(trainSubset, 1, 3); // thread 1: sequences 1, 5, 9, ...
-    std::thread t3(trainSubset, 2, 3); // thread 2: sequences 2, 6, 10, ...
+    std::thread t1(trainSubset, 0, 4); // thread 0: sequences 0, 4, 8, ...
+    std::thread t2(trainSubset, 1, 4); // thread 1: sequences 1, 5, 9, ...
+    std::thread t3(trainSubset, 2, 4); // thread 2: sequences 2, 6, 10, ...
+    std::thread t4(trainSubset, 3, 4);
+    //std::thread t5(trainSubset, 4, 5); 
 
     t1.join();
     t2.join();
     t3.join();
+    t4.join();
+    //t5.join();
 
     std::cout << "\nTraining complete!\n";
 
@@ -494,6 +498,7 @@ std::vector<int> training::makeSequence(const std::string& data, const std::unor
 
 void training::buildDictionary() {
     std::unordered_map<std::string, int> dictionary = read_dict(); // Load existing dictionary
+	std::unordered_map<std::string, int> timesSeen; // Tracks token frequencies
 
     std::ifstream file("../training_data.txt");
     if (!file.is_open()) throw std::runtime_error("Error opening file");
@@ -526,7 +531,7 @@ void training::buildDictionary() {
 
         bool isDelimiter = delims.find(currentChar) != std::string::npos;
 
-        // Special handling for apostrophes
+        // Special handling for apostrophes used instead of "
         if (currentChar == '\'') {
             bool prevIsLetter = (i > 0 && std::isalpha(normalizedData[i - 1]));
             bool nextIsLetter = (i + 1 < normalizedData.size() && std::isalpha(normalizedData[i + 1]));
@@ -542,33 +547,51 @@ void training::buildDictionary() {
             }
         }
 
-        if (isDelimiter) {
+		if (isDelimiter) { // If delimiter is hit, log current word & delimiter
             if (!currentWord.empty()) {
-                define(currentWord, dictionary);
+				std::cout << "Found word: " << currentWord << std::endl;
+                timesSeen[currentWord]++; // Track word frequency
+
                 currentWord.clear();
             }
-            define(std::string(1, currentChar), dictionary);
+            std::cout << "Found delimiter: " << std::string(1, currentChar) << std::endl;
+
+
+            // Track delimiter frequency
+            timesSeen[std::string(1, currentChar)]++;
         }
         else {
             currentWord += currentChar;
+
         }
-
-        if (i % 100 == 0) write_dict(dictionary);
     }
 
-    if (!currentWord.empty()) define(currentWord, dictionary);
-
-
-    // Add last word if any
-    if (!currentWord.empty()) {
-        define(currentWord, dictionary);
+	if (!currentWord.empty()) { // Last word
+        std::cout << "Found word: " << currentWord << std::endl;
+        timesSeen[currentWord]++;
     }
 
 
+    // Convert timesSeen to a vector of pairs (I could have done this to begin with but timesSeen[currentWord]++ is easier)
+    std::vector<std::pair<std::string, int>> freqVec(timesSeen.begin(), timesSeen.end());
 
-    if (!currentWord.empty()) { // If there is a word that was cut off by the buffer size, add it
-        define(currentWord, dictionary);
+    // Sort by frequency descending
+    std::sort(freqVec.begin(), freqVec.end(), [](const auto& a, const auto& b) {
+        return a.second > b.second;
+        });
+
+    // Only keep top 66% of words
+    int limit = static_cast<int>(freqVec.size() * 0.667);
+    for (int i = 0; i < limit; ++i) {
+		if (freqVec[i].second > 5) { // Remove rare words
+            define(freqVec[i].first, dictionary);
+        }
     }
+
+	// Add unknown token
+	define("<UNK>", dictionary);
+
+
 
     write_dict(dictionary);
 
