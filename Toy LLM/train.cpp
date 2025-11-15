@@ -20,8 +20,8 @@ std::mutex updateMutex; // protects shared weights/embeddings
 
 /* There are a lot of comments because this is a personal learning project */
 void training::buildWeights() {
-    int embedding_dim = 300;
-    float learning_rate = 0.001f; // Set to 0.001 for finer training later
+    int embedding_dim = 256;
+    float learning_rate = 0.0015f; // Set to 0.001 for finer training later
 
 
     char input;
@@ -306,7 +306,7 @@ void training::buildWeights() {
 
 
 
-            if (i % 10 == 0) {
+            if (i % 40 == 0 && threadNum == 0) { // 40 / 4 threads = every 10 iterations
                 std::cout << "Writing to file. DO NOT QUIT\r";
                 write3DVector("../weights.txt", weights);
                 write2DVector("../embeddings.txt", finalEmbeddings);
@@ -315,10 +315,10 @@ void training::buildWeights() {
     };
 
 
-    std::thread t1(trainSubset, 0, 4); // thread 0: sequences 0, 4, 8, ...
-    std::thread t2(trainSubset, 1, 4); // thread 1: sequences 1, 5, 9, ...
-    std::thread t3(trainSubset, 2, 4); // thread 2: sequences 2, 6, 10, ...
-    std::thread t4(trainSubset, 3, 4);
+    std::thread t1(trainSubset, 0, 5); // thread 0: sequences 0, 4, 8, ...
+    std::thread t2(trainSubset, 1, 5); // thread 1: sequences 1, 5, 9, ...
+    std::thread t3(trainSubset, 2, 5); // thread 2: sequences 2, 6, 10, ...
+    std::thread t4(trainSubset, 3, 5);
     std::thread t5(trainSubset, 4, 5); 
 
     t1.join();
@@ -586,16 +586,16 @@ void training::buildDictionary() {
         });
 
     // Only keep top 66% of words
-    int limit = static_cast<int>(freqVec.size() * 0.667);
+    int limit = static_cast<int>(freqVec.size() * 0.75);
     for (int i = 0; i < limit; ++i) {
-		if (freqVec[i].second > 5) { // Remove rare words
+		if (freqVec[i].second > 10) { // Remove rare words
             define(freqVec[i].first, dictionary);
         }
     }
 
 	// Add unknown token
 	define("<UNK>", dictionary);
-
+    
 
 
     write_dict(dictionary);
