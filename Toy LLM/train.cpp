@@ -2,6 +2,7 @@
 #include <fstream>
 #include <string>
 #include <vector>
+#define NOMINMAX
 #include <sstream>
 #include <math.h>
 #include "IO.h"
@@ -10,6 +11,7 @@
 #include "normalizer.h"
 #include <nlohmann/json.hpp>
 #include <mutex>
+#include <windows.h>
 #include <numeric>
 #include <algorithm>
 #include <random>
@@ -20,6 +22,7 @@ std::mutex updateMutex; // protects shared weights/embeddings
 
 /* There are a lot of comments because this is a personal learning project */
 void training::buildWeights() {
+    bool keepTraining;
     int embedding_dim = 256;
     float learning_rate = 0.0015f; // Set to 0.001 for finer training later
 
@@ -109,7 +112,7 @@ void training::buildWeights() {
     std::vector<int> sequence = makeSequence(data, dictionary);
     int totalSequences = (sequence.size() + 127) / 128; // ceil division
 
-
+    
 
     // Training loop over sequences of length 128
     auto trainSubset = [&](int threadNum, int numThreads) mutable { // Threading
@@ -127,8 +130,6 @@ void training::buildWeights() {
         auto localEmbeddings = finalEmbeddings;
 
         for (int i = intput + threadNum; i < totalSequences; i += numThreads) {
-            std::cout << "Training sequence #" << (i + 1) << "/" << totalSequences << "...\n";
-
             int start = i * 128;
             int end = std::min(start + 128, (int)sequence.size());
             int sequenceLength = end - start;
@@ -142,7 +143,7 @@ void training::buildWeights() {
 
             for (int token : tokenSequence) {
                 if (token < 0 || token >= localEmbeddings.size())
-                     throw std::runtime_error("Invalid token index");
+                    throw std::runtime_error("Invalid token index");
                 vectorSequence.push_back(localEmbeddings[token]);
             }
 
@@ -177,7 +178,7 @@ void training::buildWeights() {
 
             // Residual connection
             std::vector<std::vector<float>> hidden = matAdd(context, vectorSequence);
-			output = matMul(hidden, localWeights[3]); // project onto vocab because vectorsequence isnt same dim
+            output = matMul(hidden, localWeights[3]); // project onto vocab because vectorsequence isnt same dim
 
 
             // Apply softmax to output
@@ -209,7 +210,10 @@ void training::buildWeights() {
                     auto it = std::max_element(outputProb[t].begin(), outputProb[t].end());
                     int predictedToken = std::distance(outputProb[t].begin(), it);
                     int actualToken = tokenSequence[t];
-                    std::cout << "Thread " << threadNum << " | Loss " << combinedLoss << " | Position " << t
+                    std::cout << "Thread " << threadNum
+                        << " | Sequence #" << (i + 1)
+                        << " | Position " << t
+                        << " | Loss " << combinedLoss
                         << " | Predicted: " << decode({ predictedToken }, dictionary)
                         << " | Actual: " << decode({ actualToken }, dictionary) << std::endl;
                 }
@@ -297,7 +301,7 @@ void training::buildWeights() {
             {
                 std::lock_guard<std::mutex> lock(updateMutex);
 
-				// Merge weights (average)
+                // Merge weights (average)
                 for (int m = 0; m < weights.size(); ++m)
                     for (int i = 0; i < weights[m].size(); ++i)
                         for (int j = 0; j < weights[m][i].size(); ++j)
@@ -310,41 +314,43 @@ void training::buildWeights() {
             }
 
 
-
-
             if (i % (10 * numThreads) == 0 && threadNum == 0) {
                 std::cout << "Writing to file. DO NOT QUIT\r";
                 write3DVector("../weights.txt", weights);
                 write2DVector("../embeddings.txt", finalEmbeddings);
             }
+            if (GetAsyncKeyState(VK_PAUSE) & 0x8000 || !keepTraining)
+            {
+                std::cout << "\nQuitting thread #" << threadNum;
+                keepTraining = false;
+                break;
+            }
         }
     };
 
+    while (true) {
+        keepTraining = true;
+        int threads;
 
-	int threads = 5; // Number of threads to use
+        std::cout << "Input # of threads: ";
+        std::cin >> threads;
 
-    std::thread t1(trainSubset, 0, threads); // thread 0: sequences 0, 4, 8, ...
-    std::thread t2(trainSubset, 1, threads); // thread 1: sequences 1, 5, 9, ...
-    std::thread t3(trainSubset, 2, threads); // thread 2: sequences 2, 6, 10, ...
-    std::thread t4(trainSubset, 3, threads);
-    std::thread t5(trainSubset, 4, threads);
+        std::vector<std::thread> workers;
+        workers.reserve(threads);
 
+        // launch all threads
+        for (int i = 0; i < threads; i++) {
+            workers.emplace_back(trainSubset, i, threads);
+        }
 
-    //std::thread t6(trainSubset, 5, threads);
-    //std::thread t7(trainSubset, 6, threads);
-
-    t1.join();
-    t2.join();
-    t3.join();
-    t4.join();
-    t5.join();
-
-    //t6.join();
-   // t7.join();
-
-    std::cout << "\nTraining complete!\n";
+        // join all threads
+        for (auto& t : workers) {
+            t.join();
+        }
 
 
+        std::cout << "\nTraining complete!\n";
+    }
 }
 
 
