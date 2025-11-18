@@ -188,6 +188,26 @@ void training::buildWeights() {
                 std::vector<float>(embedding_dim, 0.0f)
             );
 
+            float combinedLoss = 0.0f;
+            for (int t = 0; t < sequenceLength; ++t)
+                combinedLoss += -log(outputProb[t][tokenSequence[t]] + 1e-9f);
+            combinedLoss /= sequenceLength;
+
+            {
+                std::lock_guard<std::mutex> lock(updateMutex); // protects console output
+                for (int t = 0; t < sequenceLength; ++t) {
+                    auto it = std::max_element(outputProb[t].begin(), outputProb[t].end());
+                    int predictedToken = std::distance(outputProb[t].begin(), it);
+                    int actualToken = tokenSequence[t];
+                    std::cout << "Thread " << threadNum
+                        << " | Sequence #" << (i + 1)
+                        << " | Position " << t
+                        << " | Loss " << combinedLoss
+                        << " | Predicted: " << decode({ predictedToken }, dictionary)
+                        << " | Actual: " << decode({ actualToken }, dictionary) << std::endl;
+                }
+            }
+
 
             /* Backward pass */
 
@@ -221,16 +241,19 @@ void training::buildWeights() {
             // Gradients for V
             gradWV = matMul(transpose(vectorSequence), dContext);
             training::clip(gradWV, 1.0f);
-
             // Gradient for attention
+            std::vector<std::vector<float>> tempAttention = matMul(dContext, transpose(V));
+
             std::vector<std::vector<float>> dAttention(sequenceLength, std::vector<float>(sequenceLength, 0.0f));
             for (int m = 0; m < sequenceLength; ++m) {
-                float sum = 0.0f;
+                float dot_sum = 0.0f;
                 for (int n = 0; n < sequenceLength; ++n)
-                    sum += attentionWeights[m][n] * dContext[m][n];
+                    dot_sum += attentionWeights[m][n] * tempAttention[m][n];
+
                 for (int n = 0; n < sequenceLength; ++n)
-                    dAttention[m][n] = attentionWeights[m][n] * (dContext[m][n] - sum);
+                    dAttention[m][n] = attentionWeights[m][n] * (tempAttention[m][n] - dot_sum);
             }
+
 
             std::vector<std::vector<float>> dQ = matMul(dAttention, K);
             std::vector<std::vector<float>> dK = matMul(transpose(dAttention), Q);
