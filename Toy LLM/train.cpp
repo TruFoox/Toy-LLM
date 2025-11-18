@@ -24,7 +24,7 @@ std::mutex updateMutex; // protects shared weights/embeddings
 void training::buildWeights() {
     bool keepTraining;
     int embedding_dim = 256;
-    float learning_rate = 0.0015f; // Set to 0.001 for finer training later
+    float learning_rate = 1e-4; // Set to 0.001 for finer training later
 
 
     char input;
@@ -148,14 +148,12 @@ void training::buildWeights() {
             }
 
             /* Forward pass */
-            std::vector<std::vector<float>> Q = matMul(vectorSequence, localWeights[0]); // seq_len x embed_dim
-            std::vector<std::vector<float>> K = matMul(vectorSequence, localWeights[1]); // seq_len x embed_dim
-            std::vector<std::vector<float>> V = matMul(vectorSequence, localWeights[2]); // seq_len x embed_dim
+            std::vector<std::vector<float>> Q = matMul(vectorSequence, localWeights[0]);
+            std::vector<std::vector<float>> K = matMul(vectorSequence, localWeights[1]);
+            std::vector<std::vector<float>> V = matMul(vectorSequence, localWeights[2]);
 
-            // Attention scores: seq_len x seq_len
+            // Attention scores
             std::vector<std::vector<float>> attentionScores = matMul(Q, transpose(K));
-
-            // Scale by sqrt(d)
             for (int m = 0; m < sequenceLength; ++m)
                 for (int n = 0; n < sequenceLength; ++n)
                     attentionScores[m][n] /= sqrt(embedding_dim);
@@ -170,64 +168,55 @@ void training::buildWeights() {
             for (int m = 0; m < sequenceLength; ++m)
                 attentionWeights[m] = softmax(attentionScores[m]);
 
-            // Context vector
+            // Context
             context = matMul(attentionWeights, V);
 
-            // Output logits
-            output = matMul(context, localWeights[3]);
-
-            // Residual connection
+            // Residual: hidden = context + vectorSequence
             std::vector<std::vector<float>> hidden = matAdd(context, vectorSequence);
-            output = matMul(hidden, localWeights[3]); // project onto vocab because vectorsequence isnt same dim
 
+            // Final projection
+            output = matMul(hidden, localWeights[3]);
 
-            // Apply softmax to output
+            // Softmax on output
             std::vector<std::vector<float>> outputProb(sequenceLength, std::vector<float>(vocab_size));
             for (int t = 0; t < sequenceLength; ++t)
                 outputProb[t] = softmax(output[t]);
 
+            // Allocate gradient accumulator 
+            std::vector<std::vector<float>> gradEmbeddings(
+                sequenceLength,
+                std::vector<float>(embedding_dim, 0.0f)
+            );
+
 
             /* Backward pass */
 
-            // Targets & Output Error
+            // Compute error
             std::vector<std::vector<float>> error(sequenceLength, std::vector<float>(vocab_size, 0.0f));
-            for (int m = 0; m < sequenceLength; ++m) {
-                for (int n = 0; n < vocab_size; ++n) {
+            for (int m = 0; m < sequenceLength; ++m)
+                for (int n = 0; n < vocab_size; ++n)
                     error[m][n] = outputProb[m][n] - (n == tokenSequence[m] ? 1.0f : 0.0f);
-                }
-            }
 
-            float combinedLoss = 0.0f;
-            for (int t = 0; t < sequenceLength; ++t)
-                combinedLoss += -log(outputProb[t][tokenSequence[t]] + 1e-9f); // avoid log(0)
-            combinedLoss /= sequenceLength;
-
-
-            // Preview predictions
-            {
-                std::lock_guard<std::mutex> lock(updateMutex); // protects console output
-                for (int t = 0; t < sequenceLength; ++t) {
-                    auto it = std::max_element(outputProb[t].begin(), outputProb[t].end());
-                    int predictedToken = std::distance(outputProb[t].begin(), it);
-                    int actualToken = tokenSequence[t];
-                    std::cout << "Thread " << threadNum
-                        << " | Sequence #" << (i + 1)
-                        << " | Position " << t
-                        << " | Loss " << combinedLoss
-                        << " | Predicted: " << decode({ predictedToken }, dictionary)
-                        << " | Actual: " << decode({ actualToken }, dictionary) << std::endl;
-                }
-            }
-
-            std::vector<std::vector<float>> gradW3 = matMul(transpose(context), error);
+            // Gradient for W_o (correct: using hidden)
+            std::vector<std::vector<float>> gradW3 = matMul(transpose(hidden), error);
             training::clip(gradW3, 1.0f);
 
-            // Update WO weights
+            // Update W_o
             for (int m = 0; m < embedding_dim; ++m)
                 for (int n = 0; n < vocab_size; ++n)
                     localWeights[3][m][n] -= learning_rate * gradW3[m][n];
 
-            std::vector<std::vector<float>> dContext = matMul(error, transpose(localWeights[3]));
+            // Backprop through W_o → hidden
+            std::vector<std::vector<float>> dHidden = matMul(error, transpose(localWeights[3]));
+
+            // Split residual: hidden = context + vectorSequence
+            std::vector<std::vector<float>> dContext = dHidden; // context path
+
+            // Immediately push residual grad to embeddings
+            for (int t = 0; t < sequenceLength; ++t)
+                for (int d = 0; d < embedding_dim; ++d)
+                    gradEmbeddings[t][d] += dHidden[t][d];
+
 
             // Gradients for V
             gradWV = matMul(transpose(vectorSequence), dContext);
@@ -259,9 +248,6 @@ void training::buildWeights() {
                     localWeights[1][m][n] -= learning_rate * gradWK[m][n];
                     localWeights[2][m][n] -= learning_rate * gradWV[m][n];
                 }
-
-            /* Calculate gradient for embeddings */
-            std::vector<std::vector<float>> gradEmbeddings(sequenceLength, std::vector<float>(embedding_dim, 0.0f));
 
             std::vector<std::vector<float>> temp;
             temp = matMul(dQ, transpose(localWeights[0]));
@@ -305,12 +291,13 @@ void training::buildWeights() {
                 for (int m = 0; m < weights.size(); ++m)
                     for (int i = 0; i < weights[m].size(); ++i)
                         for (int j = 0; j < weights[m][i].size(); ++j)
-                            weights[m][i][j] += (localWeights[m][i][j] - weights[m][i][j]);
+                            weights[m][i][j] += (localWeights[m][i][j] - weights[m][i][j]) / float(numThreads);
+
 
                 // Merge embeddings (average)
                 for (int t = 0; t < localEmbeddings.size(); ++t)
                     for (int d = 0; d < embedding_dim; ++d)
-                        finalEmbeddings[t][d] += (localEmbeddings[t][d] - finalEmbeddings[t][d]) / numThreads;
+                        finalEmbeddings[t][d] += (localEmbeddings[t][d] - finalEmbeddings[t][d]) / float(numThreads);
             }
 
 
