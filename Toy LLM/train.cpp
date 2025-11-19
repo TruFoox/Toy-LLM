@@ -200,7 +200,7 @@ void training::buildWeights() {
                     int predictedToken = std::distance(outputProb[t].begin(), it);
                     int actualToken = tokenSequence[t];
                     std::cout << "Thread " << threadNum
-                        << " | Sequence #" << (i + 1)
+                        << " | Sequence #" << (i + 1) << "/" << totalSequences
                         << " | Position " << t
                         << " | Loss " << combinedLoss
                         << " | Predicted: " << decode({ predictedToken }, dictionary)
