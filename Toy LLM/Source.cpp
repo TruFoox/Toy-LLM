@@ -74,6 +74,7 @@ int main() {
                 throw std::runtime_error("Dictionary is empty — build it first from training data!");
 
             int vocab_size = (int)dictionary.size();
+            int unkToken = dictionary["<unk>"];
 
             // Load embeddings + weights
             std::vector<std::vector<float>> embeddings = read2DVector("../embeddings.txt", embedding_dim);
@@ -87,14 +88,14 @@ int main() {
                 weights[3] = std::vector<std::vector<float>>(embedding_dim, std::vector<float>(vocab_size, 0.0f));
             }
 
+            // Encode input text as token IDs
             std::vector<int> tokenSequence;
-            int unkToken = dictionary["<unk>"];
             for (char c : input) {
                 std::string s(1, c);
                 if (dictionary.count(s))
                     tokenSequence.push_back(dictionary[s]);
                 else
-                    tokenSequence.push_back(unkToken); // temporary placeholder
+                    tokenSequence.push_back(unkToken); // fallback if character not in dictionary
             }
 
             std::vector<std::string> invDict(vocab_size);
@@ -105,10 +106,15 @@ int main() {
 
                 int seqLen = tokenSequence.size();
 
+                // Build vector sequence from all tokens generated so far
                 std::vector<std::vector<float>> vectorSeq(seqLen);
-                for (int i = 0; i < seqLen; i++)
-                    vectorSeq[i] = embeddings[tokenSequence[i]];
+                for (int i = 0; i < seqLen; i++) {
+                    int token = tokenSequence[i];
+                    if (token < 0 || token >= embeddings.size()) token = unkToken;
+                    vectorSeq[i] = embeddings[token];
+                }
 
+                // Forward pass
                 std::vector<std::vector<float>> Q = matMul(vectorSeq, weights[0]);
                 std::vector<std::vector<float>> K = matMul(vectorSeq, weights[1]);
                 std::vector<std::vector<float>> V = matMul(vectorSeq, weights[2]);
@@ -127,19 +133,19 @@ int main() {
                     att[i] = softmax(scores[i]);
 
                 std::vector<std::vector<float>> context = matMul(att, V);
-
                 std::vector<std::vector<float>> hidden = matAdd(context, vectorSeq);
                 std::vector<std::vector<float>> logits = matMul(hidden, weights[3]);
 
                 std::vector<float> probs = softmax(logits.back());
 
-                // Force <unk> to zero probability
+                // never choose <unk> for generated tokens
                 probs[unkToken] = 0.0f;
 
-                float sumProb = 0.0f;
-                for (float p : probs) sumProb += p;
+                // renormalize
+                float sumProb = std::accumulate(probs.begin(), probs.end(), 0.0f);
                 for (float& p : probs) p /= sumProb;
 
+                // pick the token with highest probability
                 int nextToken = 0;
                 float best = probs[0];
                 for (int i = 1; i < vocab_size; i++)
@@ -148,14 +154,13 @@ int main() {
                         nextToken = i;
                     }
 
-                // append + print
+                // append new token for next iteration
                 tokenSequence.push_back(nextToken);
                 std::cout << invDict[nextToken];
             }
 
             std::cout << "\n";
         }
-
 
 	}
 
